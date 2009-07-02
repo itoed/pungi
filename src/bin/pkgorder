@@ -29,19 +29,7 @@ import shutil
 import string
 import sys
 import yum
-
-sys.path.append("/usr/lib/anaconda")
-sys.path.append("/usr/lib/booty")
-
-import anaconda_log
-import logging
-logger = logging.getLogger("anaconda")
-handler = logging.StreamHandler()
-handler.setLevel(logging.ERROR)
-logger.addHandler(handler)
-
 from optparse import OptionParser
-import yum
 
 class PackageOrderer(yum.YumBase):
     def __init__(self, arch=None):
@@ -58,17 +46,16 @@ class PackageOrderer(yum.YumBase):
         pass
 
     def setup(self, fn="/etc/yum.conf", root="/", excludes=[]):
-        self.doConfigSetup(fn, root, init_plugins = False)
+        self.preconf.fn = fn
+        self.preconf.root = root
+        self.preconf.init_plugins = False
         self.conf.cache = 0
-#         if hasattr(self.repos, 'sqlite'):
-#             self.repos.sqlite = False
-#             self.repos._selectSackType()
         exclude = self.conf.exclude
         exclude.extend(excludes)
         self.conf.exclude = exclude
         cachedir = yum.misc.getCacheDir()
-        self.repos.setCacheDir(cachedir) 
-        self.repos.setCache(0) 
+        self.repos.setCacheDir(cachedir)
+        self.repos.setCache(0)
         self.doRepoSetup()
 
         self.doSackSetup(rpmUtils.arch.getArchList(self.arch))
@@ -79,46 +66,31 @@ class PackageOrderer(yum.YumBase):
     def getDownloadPkgs(self):
         pass
 
-#XXX: sigh
 processed = {}
 def processTransaction(ds):
-    del ds.ts
-    ds.initActionTs()
-    ds.populateTs(keepold=0)
+    ds.resolveDeps()
+    ds.populateTs(keepold=1)
     ds.ts.check()
     ds.ts.order()
     for (hdr, path) in ds.ts.ts.getKeys():
-        fname = os.path.basename(path)
-        fpattern = "%s*" % fname.rsplit('.', 2)[0]
-        printMatchingPkgs(fpattern)
+        printMatchingPkgs(os.path.basename(path).rsplit('.', 2)[0])
 
-def printMatchingPkgs(fpattern):
+def printMatchingPkgs(nvr):
     global processed
-
-    if os.path.isdir("%s/%s/RPMS" % (toppath, product)):
-        matches = glob.glob("%s/%s/RPMS/%s" % (toppath, product, fpattern))
-    elif os.path.isdir("%s/%s" %(toppath, product)):
-        matches = glob.glob("%s/%s/%s" % (toppath, product, fpattern))
-    else:
-        matches = glob.glob("%s/%s" % (toppath, fpattern))
-
-    for match in matches:
-        mname = os.path.basename(match)
-        if processed.has_key(mname): continue
-        processed[mname] = True
-        print mname
+    global packages
+    for match in packages.get(nvr, []):
+        if processed.has_key(match):
+            continue
+        processed[match] = True
+        print match
 
 def addPackages(ds, pkgLst):
-    ds.initActionTs()
     for pkg in pkgLst:
         ds.install(pattern=pkg)
-    ds.resolveDeps()
     processTransaction(ds)
 
 def addGroups(ds, groupLst):
-    ds.initActionTs()
     map(ds.selectGroup, filter(lambda x: ds.comps.has_group(x), groupLst))
-    ds.resolveDeps()
     processTransaction(ds)
 
 def createConfig(toppath):
@@ -134,7 +106,7 @@ name=Anaconda
 baseurl=file://%s
 enabled=1
 """ % (toppath)
-    
+
     try:
         (fd, path) = tempfile.mkstemp("", "yum-conf-", toppath)
     except (OSError, IOError), e:
@@ -158,9 +130,9 @@ if __name__ == "__main__":
                       default=[])
 
     (options, args) = parser.parse_args()
-     
+
     if len(args) != 3:
-	usage()
+        usage()
         sys.exit(1)
 
     (toppath, arch, product) = args
@@ -170,8 +142,14 @@ if __name__ == "__main__":
     if arch == "i386":
         arch = "i686"
 
-    # print out kernel related packages first
-    #printMatchingPkgs("kernel-*")        
+    packages = {}
+    for dir in ("%s/%s/RPMS" % (toppath, product),
+                "%s/%s" % (toppath, product),
+                toppath):
+        if os.path.isdir(dir):
+            for fname in sorted(os.listdir(dir)):
+                packages.setdefault(fname.rsplit('.', 2)[0], []).append(fname)
+            break
 
     if os.environ.has_key('TMPDIR'):
         testpath = "%s/pkgorder-%d" %(os.environ['TMPDIR'],os.getpid(),)
@@ -179,10 +157,10 @@ if __name__ == "__main__":
         testpath = "/tmp/pkgorder-%d" %(os.getpid(),)
 
     os.system("mkdir -p %s/var/lib/rpm" %(testpath,))
-    
+
     ds = PackageOrderer(arch=arch)
     ds.setup(fn=config, excludes=options.excludeList, root = testpath)
-    
+
     # hack, hack, hack... make sure iscsi ends up on disc1 (#208832)
     addPackages(ds, ["kernel-*","mkinitrd","mdadm"])
 
@@ -192,7 +170,7 @@ if __name__ == "__main__":
     addGroups(ds, ["core", "base", "text-internet"])
 
     addGroups(ds, ["base-x", "dial-up",
-                   "graphical-internet", "editors", 
+                   "graphical-internet", "editors",
                    "gnome-desktop", "sound-and-video", "printing",
                    "fonts", "hardware-support", "admin-tools", "online-docs",
                    "java", "legacy-fonts", "input-methods"])
@@ -209,15 +187,13 @@ if __name__ == "__main__":
                    "java-development", "kde-software-development",
                    "mail-server", "network-server", "legacy-network-server"])
 
-    addGroups(ds, ["news-server", "legacy-software-development", 
+    addGroups(ds, ["news-server", "legacy-software-development",
                    "engineering-and-scientific"])
 
-    #Everthing else but kernels
+    #Everthing else
     for po in ds.pkgSack.returnPackages():
-        if po.name.find("kernel") == -1:
-            member = ds.tsInfo.addInstall(po)
+        ds.tsInfo.addInstall(po)
 
-    ds.resolveDeps()
     processTransaction(ds)
     os.unlink(config)
     shutil.rmtree(testpath)
