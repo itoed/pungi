@@ -1,7 +1,7 @@
 %{!?python_sitelib: %define python_sitelib %(%{__python} -c "from distutils.sysconfig import get_python_lib; print get_python_lib()")}
 
 Name:           pungi
-Version:        2.0.20
+Version:        2.0.21
 Release:        1%{?dist}
 Summary:        Distribution compose tool
 
@@ -56,6 +56,9 @@ rm -rf $RPM_BUILD_ROOT
 
 
 %changelog
+* Thu Nov 04 2010 Jesse Keating <jkeating@redhat.com> - 2.0.21-1
+- Fix traceback (#634741)
+
 * Tue Sep 15 2009 Jesse Keating <jkeating@redhat.com> - 2.0.20-1
 - One more upstream pkgorder fix
 
