@@ -13,14 +13,14 @@
 # Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 
 import os
-import pypungi
-import pypungi.config
-import pypungi.ks
+import pungi.gather
+import pungi.config
+import pungi.ks
 import subprocess
 
 def main():
 
-    config = pypungi.config.Config()
+    config = pungi.config.Config()
 
     (opts, args) = get_arguments(config)
 
@@ -41,7 +41,7 @@ def main():
             pass
 
     # Set up the kickstart parser and pass in the kickstart file we were handed
-    ksparser = pypungi.ks.get_ksparser(ks_path=opts.config)
+    ksparser = pungi.ks.get_ksparser(ks_path=opts.config)
 
     if opts.sourceisos:
         config.set('pungi', 'arch', 'source')
@@ -121,7 +121,7 @@ def main():
         config.set("lorax", "installpkgs", " ".join(opts.installpkgs))
 
     # Actually do work.
-    mypungi = pypungi.Pungi(config, ksparser)
+    mypungi = pungi.gather.Pungi(config, ksparser)
 
     with mypungi.yumlock:
         if not opts.sourceisos:

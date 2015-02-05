@@ -50,9 +50,12 @@ install:
 	@python setup.py install
 
 clean:
+	@python setup.py clean
 	@rm -vf *.rpm 
 	@rm -vrf noarch
 	@rm -vf *.tar.gz
 	@rm -vrf dist
 	@rm -vf MANIFEST
 	@rm -vf Changelog
+	find . -\( -name "*.pyc" -o -name '*.pyo' -o -name "*~" -o -name "__pycache__" -\) -delete
+	find . -depth -type d -a -name '*.egg-info' -exec rm -rf {} \;

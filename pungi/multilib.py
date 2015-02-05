@@ -20,7 +20,7 @@ import re
 import fnmatch
 import pathmatch
 
-import pypungi
+import pungi.gather
 
 
 
@@ -96,7 +96,7 @@ class MultilibMethodBase(object):
         raise NotImplementedError
 
     def skip(self, po):
-        if pypungi.is_noarch(po) or pypungi.is_source(po) or pypungi.is_debug(po):
+        if pungi.gather.is_noarch(po) or pungi.gather.is_source(po) or pungi.gather.is_debug(po):
             return True
         return False
 

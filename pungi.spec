@@ -1,8 +1,8 @@
 %{!?python_sitelib: %define python_sitelib %(%{__python} -c "from distutils.sysconfig import get_python_lib; print get_python_lib()")}
 
 Name:           pungi
-Version:        3.13
-Release:        1%{?dist}
+Version:        4.0
+Release:        0.1%{?dist}
 Summary:        Distribution compose tool
 
 Group:          Development/Tools
@@ -46,7 +46,7 @@ rm -rf $RPM_BUILD_ROOT
 %defattr(-,root,root,-)
 %doc Authors Changelog COPYING GPL ToDo doc/README
 # For noarch packages: sitelib
-%{python_sitelib}/pypungi
+%{python_sitelib}/pungi
 %if 0%{?fedora} >= 9 || 0%{?rhel} >= 6
   %{python_sitelib}/%{name}-%{version}-py?.?.egg-info
 %endif
@@ -289,7 +289,7 @@ rm -rf $RPM_BUILD_ROOT
 - Add support for yum repo costs
 - Adjust manifest for Fedora 9 (kernels, languages, flash)
 
-* Mon Apr 08 2008 Jesse Keating <jkeating@redhat.com> - 1.2.14-1
+* Mon Apr 07 2008 Jesse Keating <jkeating@redhat.com> - 1.2.14-1
 - Create repodata for source.
 - Fix SRPM splittree making
 - Bump anaconda require up for fixed splittree
