@@ -1,0 +1,42 @@
+<!ELEMENT variants (ref*,variant*)>
+
+<!ELEMENT variant (product?,arches,groups,environments*,variants*)?>
+<!ATTLIST variant
+    id ID #REQUIRED
+    name CDATA #REQUIRED
+    type (variant|addon|optional|layered-product) #REQUIRED
+    has_optional (true|false) #IMPLIED
+>
+
+<!ELEMENT product (#PCDATA)>
+<!ATTLIST product
+    name CDATA #IMPLIED
+    short CDATA #IMPLIED
+    version CDATA #IMPLIED
+>
+
+<!ELEMENT arches (arch)+>
+
+<!ELEMENT groups (group)+>
+
+<!ELEMENT group (#PCDATA)>
+<!ATTLIST group
+    glob (true|false) #IMPLIED
+    default (true|false) #IMPLIED
+    uservisible (true|false) #IMPLIED
+>
+
+<!ELEMENT environments (environment)+>
+
+<!ELEMENT environment (#PCDATA)>
+<!ATTLIST environment
+    display_order CDATA #IMPLIED
+>
+
+<!ELEMENT arch (#PCDATA)>
+<!ELEMENT name (#PCDATA)>
+
+<!ELEMENT ref EMPTY>
+<!ATTLIST ref
+    id IDREF #REQUIRED
+>

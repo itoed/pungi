@@ -45,7 +45,7 @@ def get_valid_multilib_arches(tree_arch):
     multilib_arch = get_multilib_arch(yum_arch)
     if not multilib_arch:
         return []
-    return [ i for i in rpmUtils.arch.getArchList(multilib_arch) if i not in ("noarch", "src") ]
+    return [i for i in rpmUtils.arch.getArchList(multilib_arch) if i not in ("noarch", "src")]
 
 
 def get_valid_arches(tree_arch, multilib=True, add_noarch=True, add_src=False):

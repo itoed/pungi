@@ -1,0 +1,75 @@
+Random thoughts on what needs to be done before Pungi 4.0 is completed.
+
+
+Define building blocks and their metadata
+=========================================
+
+* rpms in yum repos
+* comps
+* kickstart trees
+* isos
+* kickstart trees
+* bootable images
+* readme files
+* license(s)
+
+
+Compose structure
+=================
+* topdir
+  * work, logs, etc.
+  * compose
+    * $variant
+      * $arch
+        * $content_type (rpms, isos, kickstart trees, etc.)
+          * actual content
+
+
+Split Pungi into smaller well-defined tools
+===========================================
+
+* process initial packages
+  * comps
+  * json mapping
+  * ???
+
+* grab initial package set
+  * yum repos
+  * koji instance (basically what mash does today)
+
+* resolve deps (gather)
+  * self-hosting
+  * fulltree
+  * multilib
+  * langpacks
+
+* create repos
+
+* create install images
+  * lorax
+  * buildinstall
+
+* create isos
+  * isos
+    * bootable
+    * hybrid
+    * implant md5sum
+  * jigdo
+  * checksums
+
+* run tests
+  * just quick sanity tests
+
+* notification
+  * email
+  * messagebus
+
+
+Unsorted
+========
+* run any tasks in koji or local host
+* support for non-rpm content? (java artifacts, etc.)
+* docs!
+* unit tests!
+* use productmd for metadata: https://github.com/release-engineering/productmd/
+* use next-gen tools: createrepo_c, mergerepo_c, dnf, hawkey, libcomps

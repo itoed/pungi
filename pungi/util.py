@@ -1,4 +1,6 @@
-#!/usr/bin/python -tt
+# -*- coding: utf-8 -*-
+
+
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation; version 2 of the License.
@@ -12,11 +14,19 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 
+
 import subprocess
 import os
 import shutil
 import sys
 import hashlib
+import errno
+import pipes
+import re
+
+from kobo.shortcuts import run
+from productmd import get_major_version
+
 
 def _doRunCommand(command, logger, rundir='/tmp', output=subprocess.PIPE, error=subprocess.PIPE, env=None):
     """Run a command and log the output.  Error out if we get something on stderr"""
@@ -121,3 +131,179 @@ def _doCheckSum(path, hash, logger):
     myfile.close()
 
     return '%s:%s' % (hash, sum.hexdigest())
+
+
+def makedirs(path, mode=0o775):
+    mask = os.umask(0)
+    try:
+        os.makedirs(path, mode=mode)
+    except OSError as ex:
+        if ex.errno != errno.EEXIST:
+            raise
+    os.umask(mask)
+
+
+def rmtree(path, ignore_errors=False, onerror=None):
+    """shutil.rmtree ENOENT (ignoring no such file or directory) errors"""
+    try:
+        shutil.rmtree(path, ignore_errors, onerror)
+    except OSError as ex:
+        if ex.errno != errno.ENOENT:
+            raise
+
+
+def explode_rpm_package(pkg_path, target_dir):
+    """Explode a rpm package into target_dir."""
+    pkg_path = os.path.abspath(pkg_path)
+    makedirs(target_dir)
+    run("rpm2cpio %s | cpio -iuvmd && chmod -R a+rX ." % pipes.quote(pkg_path), workdir=target_dir)
+
+
+def pkg_is_rpm(pkg_obj):
+    if pkg_is_srpm(pkg_obj):
+        return False
+    if pkg_is_debug(pkg_obj):
+        return False
+    return True
+
+
+def pkg_is_srpm(pkg_obj):
+    if isinstance(pkg_obj, str):
+        # string, probably N.A, N-V-R.A, N-V-R.A.rpm
+        for i in (".src", ".nosrc", ".src.rpm", ".nosrc.rpm"):
+            if pkg_obj.endswith(i):
+                return True
+    else:
+        # package object
+        if pkg_obj.arch in ("src", "nosrc"):
+            return True
+    return False
+
+
+def pkg_is_debug(pkg_obj):
+    if pkg_is_srpm(pkg_obj):
+        return False
+    if isinstance(pkg_obj, str):
+        # string
+        if "-debuginfo" in pkg_obj:
+            return True
+    else:
+        # package object
+        if "-debuginfo" in pkg_obj.name:
+            return True
+    return False
+
+
+# fomat: [(variant_uid_regex, {arch|*: [data]})]
+def get_arch_variant_data(conf, var_name, arch, variant):
+    result = []
+    for conf_variant, conf_data in conf.get(var_name, []):
+        if variant is not None and not re.match(conf_variant, variant.uid):
+            continue
+        for conf_arch in conf_data:
+            if conf_arch != "*" and conf_arch != arch:
+                continue
+            if conf_arch == "*" and arch == "src":
+                # src is excluded from '*' and needs to be explicitly added to the mapping
+                continue
+            if isinstance(conf_data[conf_arch], list):
+                result.extend(conf_data[conf_arch])
+            else:
+                result.append(conf_data[conf_arch])
+    return result
+
+
+# fomat: {arch|*: [data]}
+def get_arch_data(conf, var_name, arch):
+    result = []
+    for conf_arch, conf_data in conf.get(var_name, {}).items():
+        if conf_arch != "*" and conf_arch != arch:
+            continue
+        if conf_arch == "*" and arch == "src":
+            # src is excluded from '*' and needs to be explicitly added to the mapping
+            continue
+        if isinstance(conf_data, list):
+            result.extend(conf_data)
+        else:
+            result.append(conf_data)
+    return result
+
+
+def get_buildroot_rpms(compose, task_id):
+    """Get build root RPMs - either from runroot or local"""
+    result = []
+    if task_id:
+        # runroot
+        import koji
+        koji_url = compose.conf["pkgset_koji_url"]
+        koji_proxy = koji.ClientSession(koji_url)
+        buildroot_infos = koji_proxy.listBuildroots(taskID=task_id)
+        buildroot_info = buildroot_infos[-1]
+        data = koji_proxy.listRPMs(componentBuildrootID=buildroot_info["id"])
+        for rpm_info in data:
+            fmt = "%(nvr)s.%(arch)s"
+            result.append(fmt % rpm_info)
+    else:
+        # local
+        retcode, output = run("rpm -qa --qf='%{name}-%{version}-%{release}.%{arch}\n'")
+        for i in output.splitlines():
+            if not i:
+                continue
+            result.append(i)
+    result.sort()
+    return result
+
+
+def get_volid(compose, arch, variant=None, escape_spaces=False):
+    """Get ISO volume ID for arch and variant"""
+    if variant and variant.type == "addon":
+        # addons are part of parent variant media
+        return None
+
+    if variant and variant.type == "layered-product":
+        product_short = variant.product_short
+        product_version = variant.product_version
+        product_is_layered = True
+        base_product_short = compose.conf["product_short"]
+        base_product_version = get_major_version(compose.conf["product_version"])
+        variant_uid = variant.parent.uid
+    else:
+        product_short = compose.conf["product_short"]
+        product_version = compose.conf["product_version"]
+        product_is_layered = compose.conf["product_is_layered"]
+        base_product_short = compose.conf.get("base_product_short", "")
+        base_product_version = compose.conf.get("base_product_version", "")
+        variant_uid = variant and variant.uid or None
+
+    products = [
+        "%(product_short)s-%(product_version)s %(variant_uid)s.%(arch)s",
+        "%(product_short)s-%(product_version)s %(arch)s",
+    ]
+    layered_products = [
+        "%(product_short)s-%(product_version)s %(base_product_short)s-%(base_product_version)s %(variant_uid)s.%(arch)s",
+        "%(product_short)s-%(product_version)s %(base_product_short)s-%(base_product_version)s %(arch)s",
+    ]
+
+    volid = None
+    if product_is_layered:
+        all_products = layered_products + products
+    else:
+        all_products = products
+
+    for i in all_products:
+        if not variant_uid and "%(variant_uid)s" in i:
+            continue
+        volid = i % locals()
+        if len(volid) <= 32:
+            break
+
+    # from wrappers.iso import IsoWrapper
+    # iso = IsoWrapper(logger=compose._logger)
+    # volid = iso._truncate_volid(volid)
+
+    if len(volid) > 32:
+        raise ValueError("Could not create volume ID <= 32 characters")
+
+    if escape_spaces:
+        volid = volid.replace(" ", r"\x20")
+    return volid

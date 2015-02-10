@@ -1,0 +1,340 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+
+
+import os
+import sys
+import optparse
+import logging
+import locale
+import datetime
+import getpass
+import socket
+import json
+import pipes
+
+here = sys.path[0]
+if here != '/usr/bin':
+    # Git checkout
+    sys.path[0] = os.path.dirname(here)
+
+from pungi import __version__
+
+
+# force C locales
+locale.setlocale(locale.LC_ALL, "C")
+
+
+COMPOSE = None
+
+
+def main():
+    global COMPOSE
+
+    parser = optparse.OptionParser()
+    parser.add_option(
+        "--target-dir",
+        metavar="PATH",
+        help="a compose is created under this directory",
+    )
+    parser.add_option(
+        "--label",
+        help="specify compose label (example: Snapshot-1.0); required for production composes"
+    )
+    parser.add_option(
+        "--no-label",
+        action="store_true",
+        default=False,
+        help="make a production compose without label"
+    )
+    parser.add_option(
+        "--supported",
+        action="store_true",
+        default=False,
+        help="set supported flag on media (automatically on for 'RC-x.y' labels)"
+    )
+    parser.add_option(
+        "--old-composes",
+        metavar="PATH",
+        dest="old_composes",
+        default=[],
+        action="append",
+        help="Path to directory with old composes. Reuse an existing repodata from the most recent compose.",
+    )
+    parser.add_option(
+        "--compose-dir",
+        metavar="PATH",
+        help="reuse an existing compose directory (DANGEROUS!)",
+    )
+    parser.add_option(
+        "--debug-mode",
+        action="store_true",
+        default=False,
+        help="run pungi in DEBUG mode (DANGEROUS!)",
+    )
+    parser.add_option(
+        "--config",
+        help="Config file"
+    )
+    parser.add_option(
+        "--skip-phase",
+        metavar="PHASE",
+        action="append",
+        default=[],
+        help="skip a compose phase",
+    )
+    parser.add_option(
+        "--just-phase",
+        metavar="PHASE",
+        action="append",
+        default=[],
+        help="run only a specified compose phase",
+    )
+    parser.add_option(
+        "--nightly",
+        action="store_const",
+        const="nightly",
+        dest="compose_type",
+        help="make a nightly compose",
+    )
+    parser.add_option(
+        "--test",
+        action="store_const",
+        const="test",
+        dest="compose_type",
+        help="make a test compose",
+    )
+    parser.add_option(
+        "--koji-event",
+        metavar="ID",
+        type="int",
+        help="specify a koji event for populating package set",
+    )
+    parser.add_option(
+        "--version",
+        action="store_true",
+        help="output version information and exit",
+    )
+
+    opts, args = parser.parse_args()
+
+    if opts.version:
+        print("pungi %s" % __version__)
+        sys.exit(0)
+
+    if opts.target_dir and opts.compose_dir:
+        parser.error("cannot specify --target-dir and --compose-dir at once")
+
+    if not opts.target_dir and not opts.compose_dir:
+        parser.error("please specify a target directory")
+
+    if opts.target_dir and not opts.compose_dir:
+        opts.target_dir = os.path.abspath(opts.target_dir)
+        if not os.path.isdir(opts.target_dir):
+            parser.error("The target directory does not exist or is not a directory: %s" % opts.target_dir)
+    else:
+        opts.compose_dir = os.path.abspath(opts.compose_dir)
+        if not os.path.isdir(opts.compose_dir):
+            parser.error("The compose directory does not exist or is not a directory: %s" % opts.compose_dir)
+
+    compose_type = opts.compose_type or "production"
+    if compose_type == "production" and not opts.label and not opts.no_label:
+        parser.error("must specify label for a production compose")
+
+    if not opts.config:
+        parser.error("please specify a config")
+    opts.config = os.path.abspath(opts.config)
+
+    # check if all requirements are met
+    import pungi.checks
+    if not pungi.checks.check():
+        sys.exit(1)
+
+    import kobo.conf
+    import kobo.log
+    import productmd.composeinfo.compose
+
+    if opts.label:
+        try:
+            productmd.composeinfo.compose.verify_label(opts.label)
+        except ValueError as ex:
+            parser.error(str(ex))
+
+    from pungi.compose import Compose
+
+    logger = logging.Logger("Pungi")
+    kobo.log.add_stderr_logger(logger)
+
+    conf = kobo.conf.PyConfigParser()
+    conf.load_from_file(opts.config)
+
+    if opts.target_dir:
+        compose_dir = Compose.get_compose_dir(opts.target_dir, conf, compose_type=compose_type, compose_label=opts.label)
+    else:
+        compose_dir = opts.compose_dir
+
+    compose = Compose(conf, topdir=compose_dir, debug=opts.debug_mode, skip_phases=opts.skip_phase, just_phases=opts.just_phase,
+                      old_composes=opts.old_composes, koji_event=opts.koji_event, supported=opts.supported, logger=logger)
+    kobo.log.add_file_logger(logger, compose.paths.log.log_file("global", "pungi.log"))
+    COMPOSE = compose
+    run_compose(compose)
+
+
+def run_compose(compose):
+    import pungi.phases
+    import pungi.metadata
+
+    compose.write_status("STARTED")
+    compose.log_info("Host: %s" % socket.gethostname())
+    compose.log_info("User name: %s" % getpass.getuser())
+    compose.log_info("Working directory: %s" % os.getcwd())
+    compose.log_info("Command line: %s" % " ".join([pipes.quote(arg) for arg in sys.argv]))
+    compose.log_info("Compose top directory: %s" % compose.topdir)
+    compose.read_variants()
+
+    # dump the config file
+    date_str = datetime.datetime.strftime(datetime.datetime.now(), "%F_%X").replace(":", "-")
+    config_dump = compose.paths.log.log_file("global", "config-dump_%s" % date_str)
+    open(config_dump, "w").write(json.dumps(compose.conf, sort_keys=True, indent=4))
+
+    # initialize all phases
+    init_phase = pungi.phases.InitPhase(compose)
+    pkgset_phase = pungi.phases.PkgsetPhase(compose)
+    createrepo_phase = pungi.phases.CreaterepoPhase(compose)
+    buildinstall_phase = pungi.phases.BuildinstallPhase(compose)
+    productimg_phase = pungi.phases.ProductimgPhase(compose, pkgset_phase)
+    gather_phase = pungi.phases.GatherPhase(compose, pkgset_phase)
+    extrafiles_phase = pungi.phases.ExtraFilesPhase(compose, pkgset_phase)
+    createiso_phase = pungi.phases.CreateisoPhase(compose)
+    liveimages_phase = pungi.phases.LiveImagesPhase(compose)
+    test_phase = pungi.phases.TestPhase(compose)
+
+    # check if all config options are set
+    errors = []
+    for phase in (init_phase, pkgset_phase, buildinstall_phase, productimg_phase, gather_phase, createiso_phase, test_phase):
+        if phase.skip():
+            continue
+        try:
+            phase.validate()
+        except ValueError as ex:
+            for i in str(ex).splitlines():
+                errors.append("%s: %s" % (phase.name.upper(), i))
+    if errors:
+        for i in errors:
+            compose.log_error(i)
+            print(i)
+        sys.exit(1)
+
+    # INIT phase
+    init_phase.start()
+    init_phase.stop()
+
+    # PKGSET phase
+    pkgset_phase.start()
+    pkgset_phase.stop()
+
+    # BUILDINSTALL phase - start
+    buildinstall_phase.start()
+
+    # GATHER phase
+    gather_phase.start()
+    gather_phase.stop()
+
+    # EXTRA_FILES phase
+    extrafiles_phase.start()
+    extrafiles_phase.stop()
+
+    # CREATEREPO phase
+    createrepo_phase.start()
+    createrepo_phase.stop()
+
+    # BUILDINSTALL phase
+    # must finish before PRODUCTIMG
+    # must finish before CREATEISO
+    buildinstall_phase.stop()
+    if not buildinstall_phase.skip():
+        buildinstall_phase.copy_files()
+
+    # PRODUCTIMG phase
+    productimg_phase.start()
+    productimg_phase.stop()
+
+    # write treeinfo before ISOs are created
+    for variant in compose.get_variants():
+        for arch in variant.arches + ["src"]:
+            pungi.metadata.write_tree_info(compose, arch, variant)
+
+    # write .discinfo and media.repo before ISOs are created
+    for variant in compose.get_variants(recursive=True):
+        if variant.type == "addon":
+            continue
+        for arch in variant.arches + ["src"]:
+            timestamp = pungi.metadata.write_discinfo(compose, arch, variant)
+            pungi.metadata.write_media_repo(compose, arch, variant, timestamp)
+
+    # CREATEISO and LIVEIMAGES phases
+    createiso_phase.start()
+    liveimages_phase.start()
+
+    createiso_phase.stop()
+    liveimages_phase.stop()
+
+    # merge checksum files
+    for variant in compose.get_variants(types=["variant", "layered-product"]):
+        for arch in variant.arches + ["src"]:
+            iso_dir = compose.paths.compose.iso_dir(arch, variant, create_dir=False)
+            if not iso_dir or not os.path.exists(iso_dir):
+                continue
+            for checksum_type in ("md5", "sha1", "sha256"):
+                checksum_upper = "%sSUM" % checksum_type.upper()
+                checksums = sorted([i for i in os.listdir(iso_dir) if i.endswith(".%s" % checksum_upper)])
+                fo = open(os.path.join(iso_dir, checksum_upper), "w")
+                for i in checksums:
+                    data = open(os.path.join(iso_dir, i), "r").read()
+                    fo.write(data)
+
+    pungi.metadata.write_compose_info(compose)
+    compose.im.dump(compose.paths.compose.metadata("images.json")
+
+    # TEST phase
+    test_phase.start()
+    test_phase.stop()
+
+    # create a latest symlink
+    compose_dir = os.path.basename(compose.topdir)
+    symlink_name = "latest-%s-%s" % (compose.conf["product_short"], ".".join(compose.conf["product_version"].split(".")[:-1]))
+    if compose.conf["product_is_layered"]:
+        symlink_name += "-%s-%s" % (compose.conf["base_product_short"], compose.conf["base_product_version"])
+    symlink = os.path.join(compose.topdir, "..", symlink_name)
+
+    try:
+        os.unlink(symlink)
+    except OSError as ex:
+        if ex.errno != 2:
+            raise
+    try:
+        os.symlink(compose_dir, symlink)
+    except Exception as ex:
+        print("ERROR: couldn't create latest symlink: %s" % ex)
+
+    compose.log_info("Compose finished: %s" % compose.topdir)
+    compose.write_status("FINISHED")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (Exception, KeyboardInterrupt) as ex:
+        if COMPOSE:
+            tb_path = COMPOSE.paths.log.log_file("global", "traceback")
+            COMPOSE.log_error("Exception: %s" % ex)
+            COMPOSE.log_error("Extended traceback in: %s" % tb_path)
+            COMPOSE.log_critical("Compose failed: %s" % COMPOSE.topdir)
+            COMPOSE.write_status("DOOMED")
+            import kobo.tback
+            open(tb_path, "w").write(kobo.tback.Traceback().get_traceback())
+        else:
+            print("Exception: %s" % ex)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        raise
